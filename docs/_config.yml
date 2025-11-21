@@ -1,0 +1,15 @@
+description: Full documentation website
+theme: minima
+
+theme: just-the-docs
+title: RL Framework for Unitree Humanoid G1
+logo: /assets/logo.png
+color_scheme: dark
+
+nav_order: 1
+
+search_enabled: true
+
+markdown: kramdown
+kramdown:
+  input: GFM
