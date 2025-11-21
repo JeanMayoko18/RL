@@ -1,0 +1,110 @@
+# =========================================
+#  Python
+# =========================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.eggs/
+*.pkl
+*.pickle
+*.npz
+*.npy
+*.h5
+*.pth
+*.pt
+*.onnx
+
+# Virtual environments
+venv/
+env/
+.venv/
+.conda/
+conda_env/
+*.sqlite
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# =========================================
+#  Data / Models / Outputs
+# =========================================
+logs/
+output/
+outputs/
+results/
+checkpoints/
+wandb/
+tensorboard/
+tb_logs/
+*.log
+*.csv
+
+# MuJoCo
+.mujoco/
+mjkey.txt
+
+# IsaacGym
+isaacgym/python/isaacgym/_bindings/
+*.so
+*.dll
+*.pyd
+*.whl
+
+# IsaacLab
+*.usd
+*.usda
+*.usdc
+
+# Simulation videos
+*.mp4
+*.avi
+*.mov
+*.gif
+
+# =========================================
+#  ROS / ROS2
+# =========================================
+build/
+install/
+log/
+.colcon/
+colcon.meta
+*.bag*
+*.db3
+*.lidar
+*.ros
+*.rviz2
+
+# =========================================
+#  IDE / Editor
+# =========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================================
+#  Operating System Files
+# =========================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================================
+#  Backup files
+# =========================================
+*.bak
+*.tmp
+*.temp
+*~
+
+# =========================================
+#  Environment configuration (optional)
+# Uncomment if you want to track your own environment
+# environment.yml
+# requirements.txt
+
