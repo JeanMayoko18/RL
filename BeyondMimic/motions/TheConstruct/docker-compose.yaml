@@ -1,0 +1,22 @@
+services:
+  ros_humble_beyondmimic:
+    image: theconstructai/ros-humble-beyondmimic
+    container_name: ros_humble_beyondmimic
+    environment:
+      - DISPLAY=$DISPLAY
+      - QT_X11_NO_MITSHM=1
+      - XAUTHORITY=/tmp/.docker.xauth
+      - BASH_ENV=/ros_entrypoint.sh
+      - ROS_DOMAIN_ID=55
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /tmp/.docker.xauth:/tmp/.docker.xauth:rw
+      - $HOME/.Xauthority:/root/.Xauthority:rw
+    privileged: true
+    network_mode: "host"
+    devices:
+      - /dev/dri:/dev/dri  # GPU access for hardware acceleration
+    working_dir: /
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
