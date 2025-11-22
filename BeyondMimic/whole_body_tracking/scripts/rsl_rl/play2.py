@@ -1,0 +1,222 @@
+"""
+Script to play a checkpoint of an RL agent trained with RSL-RL.
+
+Launch Isaac Sim Simulator first.
+"""
+
+import argparse
+import sys
+
+from isaaclab.app import AppLauncher
+
+# local imports
+import cli_args  # isort: skip
+
+# -----------------------------
+# ARGUMENTS AND APP LAUNCHER
+# -----------------------------
+
+# add argparse arguments
+parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
+parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
+parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
+parser.add_argument(
+    "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
+)
+parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
+parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
+# append RSL-RL cli arguments
+cli_args.add_rsl_rl_args(parser)
+# append AppLauncher cli args
+AppLauncher.add_app_launcher_args(parser)
+args_cli, hydra_args = parser.parse_known_args()
+# always enable cameras to record video
+if args_cli.video:
+    args_cli.enable_cameras = True
+
+# clear out sys.argv for Hydra
+sys.argv = [sys.argv[0]] + hydra_args
+
+# launch omniverse app
+app_launcher = AppLauncher(args_cli)
+simulation_app = app_launcher.app
+
+"""Rest everything follows."""
+
+import gymnasium as gym
+import os
+import pathlib
+import torch
+
+from rsl_rl.runners import OnPolicyRunner
+
+from isaaclab.envs import (
+    DirectMARLEnv,
+    DirectMARLEnvCfg,
+    DirectRLEnvCfg,
+    ManagerBasedRLEnvCfg,
+    multi_agent_to_single_agent,
+)
+from isaaclab.utils.dict import print_dict
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+from isaaclab_tasks.utils import get_checkpoint_path
+from isaaclab_tasks.utils.hydra import hydra_task_config
+
+# Import extensions to set up environment tasks
+import whole_body_tracking.tasks  # noqa: F401
+from whole_body_tracking.utils.exporter import attach_onnx_metadata, export_motion_policy_as_onnx
+
+
+
+# -----------------------------
+# MAIN FUNCTION
+# -----------------------------
+@hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
+def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
+         agent_cfg: RslRlOnPolicyRunnerCfg):
+    """Play an RL agent in simulation."""
+
+    # Parse agent configuration
+    agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
+    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+
+    # Set log directory
+    log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
+
+    # -----------------------------
+    # LOAD CHECKPOINT FROM WANDB OR LOCAL
+    # -----------------------------
+    if args_cli.wandb_path:
+        import wandb
+        run_path = args_cli.wandb_path
+        api = wandb.Api()
+        if "model" in run_path:
+            run_path = "/".join(run_path.split("/")[:-1])
+        wandb_run = api.run(run_path)
+
+        # Find the checkpoint file
+        files = [f.name for f in wandb_run.files() if "model" in f.name]
+        if "model" in args_cli.wandb_path:
+            file = args_cli.wandb_path.split("/")[-1]
+        else:
+            if len(files) == 0:
+                raise FileNotFoundError(f"No model checkpoint found in {log_root_path}")
+            file = max(files, key=lambda x: int(x.split("_")[1].split(".")[0]))
+
+        wandb_file = wandb_run.file(str(file))
+        wandb_file.download("./logs/rsl_rl/temp", replace=True)
+        resume_path = f"./logs/rsl_rl/temp/{file}"
+        print(f"[INFO] Loading model checkpoint from WANDB: {run_path}/{file}")
+
+        # Optional motion file from CLI
+        if args_cli.motion_file:
+            print(f"[INFO] Using motion file from CLI: {args_cli.motion_file}")
+            env_cfg.commands.motion.motion_file = args_cli.motion_file
+
+        # Check for motion artifacts
+        art = next((a for a in wandb_run.used_artifacts() if a.type == "motions"), None)
+        if art is not None:
+            env_cfg.commands.motion.motion_file = str(pathlib.Path(art.download()) / "motion.npz")
+        else:
+            print("[WARN] No motion artifact found in WANDB run.")
+    else:
+        # Local checkpoint
+        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        print(f"[INFO] Loading model checkpoint from local path: {resume_path}")
+
+    # -----------------------------
+    # CREATE ENVIRONMENT
+    # -----------------------------
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    log_dir = os.path.dirname(resume_path)
+
+    # Video wrapper
+    if args_cli.video:
+        video_kwargs = {
+            "video_folder": os.path.join(log_dir, "videos", "play"),
+            "step_trigger": lambda step: step == 0,
+            "video_length": args_cli.video_length,
+            "disable_logger": True,
+        }
+        print("[INFO] Recording video during simulation.")
+        print_dict(video_kwargs, nesting=4)
+        env = gym.wrappers.RecordVideo(env, **video_kwargs)
+
+    # Convert multi-agent to single-agent if needed
+    if isinstance(env.unwrapped, DirectMARLEnv):
+        env = multi_agent_to_single_agent(env)
+
+    # Wrap environment for RSL-RL
+    env = RslRlVecEnvWrapper(env)
+
+    # -----------------------------
+    # LOAD PPO RUNNER
+    # -----------------------------
+    ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    ppo_runner.load(resume_path)
+
+    # Obtain trained policy
+    policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
+
+    # -----------------------------
+    # EXPORT POLICY TO ONNX
+    # -----------------------------
+    export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
+
+    # Safe normalizer for ONNX export
+    normalizer = getattr(ppo_runner.alg, "obs_rms", None)
+    if normalizer is None and hasattr(ppo_runner.alg, "actor_critic"):
+        normalizer = getattr(ppo_runner.alg.actor_critic, "obs_rms", None)
+
+    export_motion_policy_as_onnx(
+        env.unwrapped,
+        ppo_runner.alg.policy,
+        normalizer=normalizer,
+        path=export_model_dir,
+        filename="policy.onnx",
+    )
+    attach_onnx_metadata(env.unwrapped, args_cli.wandb_path if args_cli.wandb_path else "none", export_model_dir)
+
+    # -----------------------------
+    # SIMULATION PLAY LOOP
+    # -----------------------------
+    obs, _ = env.get_observations()
+    timestep = 0
+    while simulation_app.is_running():
+        with torch.inference_mode():
+            actions = policy(obs)
+
+            # Ensure actions have shape [num_envs, action_dim]
+            if actions.ndim == 1:
+                actions = actions.unsqueeze(0)
+
+            # Step environment (compatible with new IsaacLab versions)
+            step_out = env.step(actions)
+
+            # Unpack step results (handles both 4 or 5 return values)
+            if len(step_out) == 4: # From IsaacLab 2023+
+                obs, rew, terminated, info = step_out
+            elif len(step_out) == 5: # Form IsaacLab 2022
+                obs, rew, terminated, truncated, info = step_out
+            else:
+                raise RuntimeError(f"Unexpected env.step() output format: {len(step_out)} values")
+
+        # Increment timestep and exit if video length reached
+
+        if args_cli.video:
+            timestep += 1
+            if timestep >= args_cli.video_length:
+                break
+
+    # Close environment
+    env.close()
+
+
+# -----------------------------
+# ENTRY POINT
+# -----------------------------
+if __name__ == "__main__":
+    main()
+    simulation_app.close()
+
