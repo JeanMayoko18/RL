@@ -1,35 +1,88 @@
+
 #!/bin/bash
 # =========================================
-# Script to install a Python component
-# inside the isaac-env or unitree-rl environment
-# without conflicts between ROS2 and Python 3.10
+# Universal script to run Python or Conda commands
+# inside the isaac-env / unitree-rl / leggGym-rl environment
+# Avoid conflicts between ROS2 and Python 3.10+
+# Restores PYTHONPATH on shell exit
 # =========================================
 
-# Save the current PYTHONPATH
+# Save current PYTHONPATH
 OLD_PYTHONPATH="$PYTHONPATH"
-
-# Temporarily disable PYTHONPATH
 unset PYTHONPATH
 echo "[INFO] PYTHONPATH temporarily disabled"
 
-# Automatically restore PYTHONPATH when the script exits
+# Restore PYTHONPATH on exit
 trap 'export PYTHONPATH="$OLD_PYTHONPATH"; echo "[INFO] PYTHONPATH restored on exit"' EXIT
 
-# Activate the conda environment
-source ~/anaconda3/etc/profile.d/conda.sh
+# ------------------------------
+# Detect package manager
+# Priority: Conda > Micromamba
+# ------------------------------
+CONDA_BASE=""
+MAMBA_BASE=""
+
+if command -v conda >/dev/null 2>&1; then
+    CONDA_BASE=$(conda info --base)
+    echo "[INFO] Using Conda at $CONDA_BASE"
+elif command -v micromamba >/dev/null 2>&1; then
+    MAMBA_BASE=$(micromamba info --base)
+    echo "[INFO] Using Micromamba at $MAMBA_BASE"
+else
+    echo "[ERROR] Neither Conda nor Micromamba found. Please install one first."
+    exit 1
+fi
+
+# ------------------------------
+# Activate environment
+# ------------------------------
 #conda activate isaac-env
 #conda activate unitree-rl
-conda activate leggGym-rl
+ENV_NAME="leggGym-rl"
+if [ -n "$CONDA_BASE" ]; then
+    source "$CONDA_BASE/etc/profile.d/conda.sh"
+    echo "[INFO] Activating conda environment: $ENV_NAME"
+    conda activate "$ENV_NAME" || { echo "[ERROR] Failed to activate $ENV_NAME"; exit 1; }
+elif [ -n "$MAMBA_BASE" ]; then
+    source "$MAMBA_BASE/etc/profile.d/micromamba.sh"
+    echo "[INFO] Activating micromamba environment: $ENV_NAME"
+    micromamba activate "$ENV_NAME" || { echo "[ERROR] Failed to activate $ENV_NAME"; exit 1; }
+fi
 
-# Export LD_LIBRARY_PATH for libpython3.8.so
-#export LD_LIBRARY_PATH=~/anaconda3/envs/unitree-rl/lib:$LD_LIBRARY_PATH
-export LD_LIBRARY_PATH=~/anaconda3/envs/leggGym-rl/lib:$LD_LIBRARY_PATH
+# ------------------------------
+# Configure LD_LIBRARY_PATH
+# ------------------------------
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib/python3.8/site-packages/isaacgym/_bindings/linux-x86_64:$LD_LIBRARY_PATH"
+echo "[INFO] LD_LIBRARY_PATH configured for $CONDA_PREFIX"
 
-# Run the command passed as an argument
-# Example usage: ./temp_pythonpath.sh pip install -e ~/isaacgym/python
-echo "[INFO] Installing or verifying the component..."
-"$@"
-#pip install -e ~/isaacgym/python
+# ------------------------------
+# Check the first argument to decide execution
+# ------------------------------
+if [ $# -eq 0 ]; then
+    echo "[INFO] No command provided, opening interactive shell..."
+    bash --rcfile <(echo "PS1='($ENV_NAME) \w\$ '")
+    exit 0
+fi
 
-# Optional: stay in an interactive shell
-# bash
+CMD="$1"
+shift  # remove first argument
+
+case "$CMD" in
+    python)
+        echo "[INFO] Running Python command: $CMD $*"
+        python "$@"
+        ;;
+    conda)
+        echo "[INFO] Running Conda command: $CMD $*"
+        conda "$@"
+        ;;
+    micromamba)
+        echo "[INFO] Running Micromamba command: $CMD $*"
+        micromamba "$@"
+        ;;
+    *)
+        echo "[INFO] Running generic command: $CMD $*"
+        "$CMD" "$@"
+        ;;
+esac
